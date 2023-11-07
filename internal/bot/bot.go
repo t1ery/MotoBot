@@ -2,7 +2,8 @@ package bot
 
 import (
 	"fmt"
-	"io/ioutil"
+	"github.com/t1ery/MotoBot/config"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -14,15 +15,15 @@ import (
 
 // Bot представляет интерфейс для взаимодействия с ботом.
 type Bot interface {
-	CreateProfile(userID int, updates <-chan tgbotapi.Update) error // Создание анкеты
-	EditProfile(userID int, updates <-chan tgbotapi.Update) error   // Редактирование анкеты
-	DeleteProfile(userID int) error                                 // Удаление анкеты
-	SendProfile(profile *user.Profile) error                        // Отправка анкеты в соответствующую тему
-	GetProjectInfo(chatID int64) error                              // Предоставление информации о проекте пользователю
-	Run()                                                           // Запуск бота
+	CreateProfile(userID int, chatID int64, updates <-chan tgbotapi.Update) error // Создание анкеты
+	EditProfile(userID int, chatID int64, updates <-chan tgbotapi.Update) error   // Редактирование анкеты
+	DeleteProfile(userID int) error                                               // Удаление анкеты
+	SendProfile(userID int, chatID int64, profile *user.Profile) error            // Отправка анкеты в соответствующую тему
+	GetProjectInfo(chatID int64) error                                            // Предоставление информации о проекте пользователю
+	Run()                                                                         // Запуск бота
 }
 
-// BotImpl представляет реализацию интерфейса Bot.
+// MotoBot представляет реализацию интерфейса Bot.
 type MotoBot struct {
 	bot         *tgbotapi.BotAPI
 	dataStorage storage.Storage
@@ -47,6 +48,17 @@ func NewBot(token string, dataStorage storage.Storage, chatID int64) (Bot, error
 
 // Run запускает бота и начинает обработку обновлений.
 func (b *MotoBot) Run() {
+
+	// Здесь мы запрашиваем ChatID из файла конфигурации
+	configValues, err := config.GetConfigValuesFromConfig("ChatID")
+	if err != nil {
+		log.Panic(err)
+	}
+
+	chatID, ok := configValues["ChatID"].(int64)
+	if !ok {
+		log.Panic("ChatID не является корректным int64 значением")
+	}
 
 	log.Printf("Бот подписан на обновления к чату - ChatID: %d\n", b.chatID)
 
@@ -82,13 +94,13 @@ func (b *MotoBot) Run() {
 					}
 				case "start":
 					// Обработка команды "/start"
-					err := b.CreateProfile(update.Message.From.ID, updates)
+					err := b.CreateProfile(update.Message.From.ID, chatID, updates)
 					if err != nil {
 						log.Printf("Ошибка при создании анкеты: %v", err)
 					}
 				case "edit":
 					// Обработка команды "/edit"
-					err := b.EditProfile(update.Message.From.ID, updates)
+					err := b.EditProfile(update.Message.From.ID, chatID, updates)
 					if err != nil {
 						log.Printf("Ошибка при попытке редактирования анкеты: %v", err)
 					}
@@ -122,13 +134,13 @@ func (b *MotoBot) Run() {
 			case "/start":
 				// Обработка команды "Создание анкеты"
 				log.Printf("Отправка сообщения пользователю с ID: %d", update.CallbackQuery.From.ID)
-				err := b.CreateProfile(update.CallbackQuery.From.ID, updates)
+				err := b.CreateProfile(update.CallbackQuery.From.ID, chatID, updates)
 				if err != nil {
 					log.Printf("Ошибка при создании анкеты: %v", err)
 				}
 			case "/edit":
 				// Обработка команды "Редактирование анкеты"
-				err := b.EditProfile(update.CallbackQuery.From.ID, updates)
+				err := b.EditProfile(update.CallbackQuery.From.ID, chatID, updates)
 				if err != nil {
 					log.Printf("Ошибка при попытке редактирования анкеты: %v", err)
 				}
@@ -143,7 +155,7 @@ func (b *MotoBot) Run() {
 	}
 }
 
-func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) error {
+func (b *MotoBot) CreateProfile(userID int, chatID int64, updates <-chan tgbotapi.Update) error {
 	// Получаем профиль пользователя из хранилища
 	profile, err := b.dataStorage.GetProfile(userID)
 	if err != nil {
@@ -162,15 +174,11 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 			var message tgbotapi.MessageConfig
 			switch creationState {
 			case user.StepFirstName:
-				message = tgbotapi.NewMessage(int64(userID), "Шаг 1: Пожалуйста, предоставьте ваше имя:")
+				message = tgbotapi.NewMessage(int64(userID), "Шаг 1: Введите ваше имя:")
 			case user.StepLastName:
-				message = tgbotapi.NewMessage(int64(userID), "Шаг 2: Пожалуйста, предоставьте вашу фамилию:")
+				message = tgbotapi.NewMessage(int64(userID), "Шаг 2: Введите вашу фамилию:")
 			case user.StepAge:
-				message = tgbotapi.NewMessage(int64(userID), "Шаг 3: Пожалуйста, предоставьте ваш возраст:")
-			case user.StepInterests:
-				message = tgbotapi.NewMessage(int64(userID), "Шаг 4: Пожалуйста, предоставьте ваши интересы:")
-			case user.StepPhoto:
-				message = tgbotapi.NewMessage(int64(userID), "Шаг 5: Пожалуйста, загрузите 2-3 фотографии на ваш выбор::")
+				message = tgbotapi.NewMessage(int64(userID), "Шаг 3: Введите ваш возраст:")
 			case user.StepIsDriver:
 				inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
 					tgbotapi.NewInlineKeyboardRow(
@@ -178,8 +186,20 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 						tgbotapi.NewInlineKeyboardButtonData("Нет", "is_driver_no"),
 					),
 				)
-				message = tgbotapi.NewMessage(int64(userID), "Шаг 6: Вы являетесь водителем?")
+				message = tgbotapi.NewMessage(int64(userID), "Шаг 4: Вы являетесь водителем?")
 				message.ReplyMarkup = inlineKeyboard
+			case user.StepInterests:
+				var messageText string
+				if profile.IsDriver {
+					messageText = "Шаг 5: Какие у вас будут пожелания к пассажиру?"
+				} else {
+					messageText = "Шаг 5: Какие у вас будут пожелания к водителю?"
+				}
+				message = tgbotapi.NewMessage(int64(userID), messageText)
+			case user.StepPhoto:
+				message = tgbotapi.NewMessage(int64(userID), "Шаг 6: Загрузите фотографию на ваш выбор:")
+			case user.StepContacts:
+				message = tgbotapi.NewMessage(int64(userID), "Шаг 7: Укажите по желанию контакты для связи с вами, например - номер телефона:")
 			case user.StepCompleted:
 				break
 			}
@@ -196,9 +216,7 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 				// Канал закрыт, завершаем выполнение
 				return nil
 			}
-			log.Printf("userUpdate: %+v", userUpdate)
-			log.Printf("userUpdate.Message: %+v", userUpdate.Message)
-			if userUpdate.Message != nil && userUpdate.Message.Text != "" {
+			if userUpdate.Message != nil && (userUpdate.Message.Text != "" || len(*userUpdate.Message.Photo) > 0) {
 				switch creationState {
 				case user.StepFirstName:
 					profile.FirstName = userUpdate.Message.Text
@@ -211,56 +229,6 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 					if err == nil {
 						profile.Age = age
 					}
-					creationState = user.StepInterests
-				case user.StepInterests:
-					profile.Interests = userUpdate.Message.Text
-					creationState = user.StepPhoto
-				case user.StepPhoto:
-					// Проверяем, есть ли фотографии в сообщении
-					if userUpdate.Message != nil {
-						log.Printf("userUpdate: %+v", userUpdate)
-						log.Printf("userUpdate.Message: %+v", userUpdate.Message)
-						log.Println("Обработка текстовых сообщений")
-
-						if *userUpdate.Message.Photo != nil {
-							log.Printf("Фотографии в сообщении: %d", len(*userUpdate.Message.Photo))
-							if len(*userUpdate.Message.Photo) > 0 {
-								// Получаем информацию о файле фотографии
-								photo := (*userUpdate.Message.Photo)[len(*userUpdate.Message.Photo)-1] // Берем последнюю (самую большую) фотографию
-								log.Printf("FileID фотографии: %s", photo.FileID)
-								log.Printf("Размер фотографии: %d", photo.FileSize)
-
-								fileConfig := tgbotapi.FileConfig{FileID: photo.FileID}
-								photoFile, err := b.bot.GetFile(fileConfig)
-								if err != nil {
-									log.Printf("Ошибка при получении файла фотографии: %v", err)
-									// Обработка ошибки - возможно, стоит уведомить пользователя
-								} else {
-									log.Printf("FileID файла фотографии: %s", photoFile.FileID)
-									log.Printf("Путь файла фотографии: %s", photoFile.FilePath)
-
-									// Загружаем фотографию
-									photoBytes, err := b.DownloadPhoto(photoFile.FilePath)
-									if err != nil {
-										log.Printf("Ошибка при загрузке файла фотографии: %v", err)
-										// Обработка ошибки - возможно, стоит уведомить пользователя
-									} else {
-										// Добавляем []byte фотографии в срез Photos
-										profile.Photos = append(profile.Photos, photoBytes)
-
-										log.Printf("Фотография успешно загружена и добавлена в профиль")
-									}
-								}
-							} else {
-								log.Println("Нет фотографий в сообщении")
-							}
-						} else {
-							log.Println("Сообщение не содержит фотографий")
-						}
-					} else {
-						log.Println("Сообщение пустое")
-					}
-
 					creationState = user.StepIsDriver
 				case user.StepIsDriver:
 					if userUpdate.Message.Text == "Да" {
@@ -268,6 +236,59 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 					} else {
 						profile.IsDriver = false
 					}
+					creationState = user.StepInterests
+				case user.StepInterests:
+					profile.Interests = userUpdate.Message.Text
+					creationState = user.StepPhoto
+				case user.StepPhoto:
+					// Проверяем, есть ли фотографии в сообщении
+					if userUpdate.Message != nil {
+						if userUpdate.Message.Photo != nil && len(*userUpdate.Message.Photo) > 0 {
+							// Выбираем самую большую по размеру фотографию из всех отправленных
+							largestPhoto := (*userUpdate.Message.Photo)[0]
+							for _, photo := range *userUpdate.Message.Photo {
+								if photo.FileSize > largestPhoto.FileSize {
+									largestPhoto = photo
+								}
+							}
+
+							// Получаем информацию о файле фотографии
+							fileConfig := tgbotapi.FileConfig{FileID: largestPhoto.FileID}
+							photoFile, err := b.bot.GetFile(fileConfig)
+							if err != nil {
+								log.Printf("Ошибка при получении файла фотографии: %v", err)
+								// Обработка ошибки - возможно, стоит уведомить пользователя
+								// В данном случае, можно просто отправить сообщение, что не удалось получить фотографию.
+							} else {
+								// Загружаем фотографию
+								photoBytes, err := b.downloadPhoto(photoFile.FilePath)
+								if err != nil {
+									log.Printf("Ошибка при загрузке файла фотографии: %v", err)
+								} else {
+									// Добавляем фотографию в структуру пользователя
+									profile.Photo = photoBytes
+
+									// Выводим информацию о фотографии в лог
+									log.Printf("Сохранена фотография размером %d байт", len(photoBytes))
+
+									// Переходим к следующему шагу
+									creationState = user.StepContacts
+								}
+							}
+						} else {
+							log.Println("Нет фотографий в сообщении")
+						}
+					} else {
+						// Если нет фотографий в сообщении, отправляем сообщение пользователю
+						message := tgbotapi.NewMessage(int64(userID), "На данном шаге необходимо загрузить фотографию.")
+						_, err := b.bot.Send(message)
+						if err != nil {
+							log.Printf("Ошибка при отправке сообщения: %v", err)
+							// Обработка ошибки
+						}
+					}
+				case user.StepContacts:
+					profile.Contacts = userUpdate.Message.Text
 					creationState = user.StepCompleted
 				}
 			} else if userUpdate.CallbackQuery != nil {
@@ -276,7 +297,7 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 				} else if userUpdate.CallbackQuery.Data == "is_driver_no" {
 					profile.IsDriver = false
 				}
-				creationState = user.StepCompleted
+				creationState = user.StepInterests
 			}
 
 			// Выход из цикла, если текущий шаг завершен
@@ -292,7 +313,7 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 		}
 
 		// После завершения всех шагов, отправляем анкету в группу
-		err := b.SendProfile(profile)
+		err := b.SendProfile(userID, chatID, profile)
 		if err != nil {
 			return err
 		}
@@ -315,7 +336,7 @@ func (b *MotoBot) CreateProfile(userID int, updates <-chan tgbotapi.Update) erro
 }
 
 // Редактирование анкеты
-func (b *MotoBot) EditProfile(userID int, updates <-chan tgbotapi.Update) error {
+func (b *MotoBot) EditProfile(userID int, chatID int64, updates <-chan tgbotapi.Update) error {
 	// Получите профиль пользователя из хранилища
 	profile, err := b.dataStorage.GetProfile(userID)
 	if err != nil {
@@ -363,7 +384,7 @@ func (b *MotoBot) EditProfile(userID int, updates <-chan tgbotapi.Update) error 
 			switch callbackData {
 			case "edit_name":
 				// Редактирование имени
-				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Пожалуйста, предоставьте новое имя:")
+				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Введите новое имя:")
 				_, err := b.bot.Send(message)
 				if err != nil {
 					return err
@@ -376,7 +397,7 @@ func (b *MotoBot) EditProfile(userID int, updates <-chan tgbotapi.Update) error 
 
 			case "edit_last_name":
 				// Редактирование фамилии
-				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Пожалуйста, предоставьте новую фамилию:")
+				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Введите новую фамилию:")
 				_, err := b.bot.Send(message)
 				if err != nil {
 					return err
@@ -389,7 +410,7 @@ func (b *MotoBot) EditProfile(userID int, updates <-chan tgbotapi.Update) error 
 
 			case "edit_age":
 				// Редактирование возраста
-				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Пожалуйста, предоставьте новый возраст:")
+				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Введите новый возраст:")
 				_, err := b.bot.Send(message)
 				if err != nil {
 					return err
@@ -406,7 +427,7 @@ func (b *MotoBot) EditProfile(userID int, updates <-chan tgbotapi.Update) error 
 
 			case "edit_interests":
 				// Редактирование интересов
-				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Пожалуйста, предоставьте новые интересы:")
+				message := tgbotapi.NewMessage(int64(userID), "Редактирование: Напишите о своих новых интересах и увлечениях:")
 				_, err := b.bot.Send(message)
 				if err != nil {
 					return err
@@ -428,7 +449,7 @@ func (b *MotoBot) EditProfile(userID int, updates <-chan tgbotapi.Update) error 
 				}
 
 				// Отправление обновленной анкеты в группу
-				err = b.SendProfile(profile)
+				err = b.SendProfile(userID, chatID, profile)
 				if err != nil {
 					return err
 				}
@@ -492,27 +513,39 @@ func (b *MotoBot) DeleteProfile(userID int) error {
 }
 
 // Отправляет анкету пользователя в группу и сохраняет MessageID в хранилище
-func (b *MotoBot) SendProfile(profile *user.Profile) error {
-	// Преобразуйте анкету в JSON
-	profileJSON, err := profile.ToJSON()
+func (b *MotoBot) SendProfile(userID int, chatID int64, profile *user.Profile) error {
+	// Извлеките username из полученной информации, если он доступен
+	username, err := b.getUsername(userID, chatID)
+
+	// Подготовьте текст анкеты
+	messageText := "Анкета пользователя: " + "@" + username + "\n"
+	messageText += "Имя: " + profile.FirstName + "\n"
+	messageText += "Фамилия: " + profile.LastName + "\n"
+	messageText += "Возраст: " + strconv.Itoa(profile.Age) + "\n"
+	messageText += "Интересы: " + profile.Interests + "\n"
+	messageText += "Водитель: "
+	if profile.IsDriver {
+		messageText += "🏍️\n"
+	} else {
+		messageText += "🚶\n"
+	}
+	messageText += "Контакты: " + profile.Contacts + "\n"
+
+	// Отправьте сообщение с фотографией и текстом
+	msg := tgbotapi.NewPhotoUpload(b.chatID, tgbotapi.FileBytes{
+		Bytes: profile.Photo,
+	})
+	msg.Caption = messageText
+
+	sentMsg, err := b.bot.Send(msg)
 	if err != nil {
 		return err
 	}
 
-	// Отправьте JSON в чат группы
-	messageText := "А я всё ждал, когда же ты появишься:\n" + profileJSON
-	message := tgbotapi.NewMessage(b.chatID, messageText)
+	// Сохраните MessageID в профиле анкеты
+	profile.MessageID = sentMsg.MessageID
 
-	// Отправляем сообщение
-	msg, err := b.bot.Send(message)
-	if err != nil {
-		return err
-	}
-
-	// Сохраняем MessageID в профиле анкеты
-	profile.MessageID = msg.MessageID
-
-	// Обновляем профиль в хранилище с новым MessageID
+	// Обновите профиль в хранилище с новым MessageID
 	err = b.dataStorage.SaveProfile(profile)
 	if err != nil {
 		return err
@@ -532,20 +565,8 @@ func (b *MotoBot) GetProjectInfo(chatID int64) error {
 
 // welcomeNewUser отправляет приветственное сообщение в личку пользователю и, если невозможно, то приветствует его в группе без инлайн клавиатуры.
 func (b *MotoBot) welcomeNewUser(userID int, chatID int64) error {
-	// Получение информации о пользователе по userID
-	chatConfig := tgbotapi.ChatConfigWithUser{
-		ChatID: chatID, // ID чата, в котором вы хотите проверить членство пользователя
-		UserID: userID, // ID пользователя, членство которого вы хотите проверить
-	}
 
-	user, err := b.bot.GetChatMember(chatConfig)
-	if err != nil {
-		// Обработка ошибки
-		return err
-	}
-
-	// Извлеките username из полученной информации, если он доступен
-	username := user.User.UserName
+	username, err := b.getUsername(userID, chatID)
 
 	// Приветственное сообщение
 	welcomeMessage := fmt.Sprintf("Добро пожаловать, @%s! Чем я могу вам помочь?", username)
@@ -613,7 +634,7 @@ func (b *MotoBot) sendUnknownCommandMessage(chatID int64) error {
 }
 
 // DownloadFile загружает файл по его пути и возвращает []byte с содержимым файла.
-func (b *MotoBot) DownloadPhoto(filePath string) ([]byte, error) {
+func (b *MotoBot) downloadPhoto(filePath string) ([]byte, error) {
 	fileURL := "https://api.telegram.org/file/bot" + b.token + "/" + filePath
 	response, err := http.Get(fileURL)
 	if err != nil {
@@ -625,10 +646,27 @@ func (b *MotoBot) DownloadPhoto(filePath string) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP статус: %s", response.Status)
 	}
 
-	fileBytes, err := ioutil.ReadAll(response.Body)
+	fileBytes, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, err
 	}
 
 	return fileBytes, nil
+}
+
+// Функция getUsername возвращает имя пользователя
+func (b *MotoBot) getUsername(userID int, chatID int64) (string, error) {
+	// Получение информации о пользователе по userID
+	chatConfig := tgbotapi.ChatConfigWithUser{
+		ChatID: chatID, // ID чата, в котором вы хотите проверить членство пользователя
+		UserID: userID, // ID пользователя, членство которого вы хотите проверить
+	}
+
+	user, err := b.bot.GetChatMember(chatConfig)
+	if err != nil {
+		// Обработка ошибки
+		return "", err
+	}
+
+	return user.User.UserName, nil
 }

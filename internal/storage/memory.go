@@ -2,7 +2,6 @@ package storage
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/t1ery/MotoBot/internal/user"
@@ -24,7 +23,6 @@ func (s *MemoryStorage) SaveProfile(profile *user.Profile) error {
 	defer s.mu.Unlock()
 
 	s.data[profile.UserID] = profile
-	fmt.Printf("Профиль сохранен в хранилище: %+v\n", profile)
 	return nil
 }
 
@@ -36,10 +34,6 @@ func (s *MemoryStorage) GetProfile(userID int) (*user.Profile, error) {
 	if !found {
 		return nil, errors.New("profile not found")
 	}
-
-	// Вывод информации о профиле в лог
-	fmt.Printf("Получен профиль для пользователя %d: %+v\n", userID, profile)
-
 	return profile, nil
 }
 
@@ -50,5 +44,3 @@ func (s *MemoryStorage) DeleteProfile(userID int) error {
 	delete(s.data, userID)
 	return nil
 }
-
-// Другие методы реализации интерфейса DataStorage
